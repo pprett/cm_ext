@@ -19,6 +19,12 @@
 # This program creates a manifest.json file from a directory of parcels and
 # places the file in the same directory as the parcels.
 # Once created, the directory can be served over http as a parcel repository.
+#
+# This program is slighly modified to allow for updating manifest files
+# and adds a file lock to avoid race conditions on updating the files.
+#
+# Usage: make_manifest.py create /path/to/parcels
+#        make_manifest.py update /path/to/parcels CDH-5.4.0.parcel CDH-5.4.1.parcel
 
 import hashlib
 import json
@@ -68,7 +74,8 @@ class FileLock(object):
         if (time.time() - start_time) >= self.timeout:
           raise FileLockException("Timeout occured.")
         time.sleep(self.delay)
-      self.is_locked = True
+    self.is_locked = True
+
 
   def release(self):
     """ Get rid of the lock by deleting the lockfile.
