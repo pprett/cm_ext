@@ -27,6 +27,74 @@ import re
 import sys
 import tarfile
 import time
+import errno
+
+
+class FileLockException(Exception):
+    pass
+
+
+class FileLock(object):
+  """ A file locking mechanism that has context-manager support so
+  you can use it in a with statement.
+
+  Implementation based on:
+
+  http://www.evanfosmark.com/2009/01/cross-platform-file-locking-support-in-python/
+  """
+
+  def __init__(self, lockfile, timeout=10, delay=0.05):
+    self.is_locked = False
+    self.lockfile = lockfile
+    self.fd = None
+    self.timeout = timeout
+    self.delay = delay
+
+  def acquire(self):
+    """ Acquire the lock, if possible.
+
+    This will not retry but sets `is_locked` corrispondingly.
+    """
+    start_time = time.time()
+    while True:
+      try:
+        self.fd = os.open(self.lockfile, os.O_CREAT | os.O_EXCL | os.O_RDWR)
+        break
+      except OSError as e:
+        if e.errno != errno.EEXIST:
+          raise
+        # FIXME we should check if lockfile was created more than 1h ago, if so we should
+        # consider it stale
+        if (time.time() - start_time) >= self.timeout:
+          raise FileLockException("Timeout occured.")
+        time.sleep(self.delay)
+      self.is_locked = True
+
+  def release(self):
+    """ Get rid of the lock by deleting the lockfile.
+    When working in a `with` statement, this gets automatically
+    called at the end.
+    """
+    if self.is_locked:
+      os.close(self.fd)
+      os.unlink(self.lockfile)
+      self.is_locked = False
+
+  def __enter__(self):
+    if not self.is_locked:
+      self.acquire()
+      return self
+
+  def __exit__(self, type, value, traceback):
+    if self.is_locked:
+      self.release()
+
+  def __del__(self):
+    """ Make sure that the FileLock instance doesn't leave a lockfile
+    lying around.
+    """
+    self.release()
+
 
 def _get_parcel_dirname(parcel_name):
   """
@@ -46,7 +114,7 @@ def _safe_copy(key, src, dest):
   if key in src:
     dest[key] = src[key]
 
-def make_manifest(path, timestamp=time.time()):
+def make_manifest(path, timestamp=time.time(), files=None, manifest=None):
   """
   Make a manifest.json document from the contents of a directory.
 
@@ -58,15 +126,23 @@ def make_manifest(path, timestamp=time.time()):
   @param timestamp: Unix timestamp to place in manifest.json
   @return: the manifest.json as a string
   """
-  manifest = {}
+  if not manifest:
+    manifest = {}
+    manifest['parcels'] = []
+
+  if not files:
+    files = [f for f in os.listdir(path) if f.endswith('.parcel')]
+
+  entries = make_entries(path, files)
+
+  manifest['parcels'] = manifest['parcels'] + entries
   manifest['lastUpdated'] = int(timestamp * 1000)
-  manifest['parcels'] = []
+  return json.dumps(manifest, indent=4, separators=(',', ': '))
 
-  files = os.listdir(path)
+
+def make_entries(path, files):
+  entries = []
   for f in files:
-    if not f.endswith('.parcel'):
-      continue
-
     print("Found parcel %s" % (f,))
     entry = {}
     entry['parcelName'] = f
@@ -100,17 +176,33 @@ def make_manifest(path, timestamp=time.time()):
       except KeyError:
         # No problem if there's no release notes
         pass
+    entries.append(entry)
+  return entries
 
-    manifest['parcels'].append(entry)
-
-  return json.dumps(manifest, indent=4, separators=(',', ': '))
 
 if __name__ == "__main__":
   path = os.path.curdir
-  if len(sys.argv) > 1:
-    path = sys.argv[1]
-  print("Scanning directory: %s" % (path))
+  _ = sys.argv.pop(0)
+  cmd = sys.argv.pop(0)
+  assert cmd in ('create', 'update')
+  path = sys.argv.pop(0)
 
-  manifest = make_manifest(path)
-  with open(os.path.join(path, 'manifest.json'), 'w') as fp:
-    fp.write(manifest)
+  fnames = sys.argv[:]
+
+  path_to_manifest = os.path.join(path, 'manifest.json')
+  path_to_filelock = path_to_manifest + '.lock'
+  with FileLock(path_to_filelock, timeout=60*10, delay=5):
+    if cmd == 'create':
+      manifest = None
+    elif cmd == 'update':
+      if not os.path.exists(path_to_manifest):
+        raise ValueError('manifest.json expected at {} but not found'.format(path_to_manifest))
+      with open(path_to_manifest, 'r') as fp:
+        manifest = json.load(fp)
+
+    print("Scanning directory: %s" % (path))
+
+    manifest = make_manifest(path, files=fnames, manifest=manifest)
+
+    with open(path_to_manifest, 'w') as fp:
+      fp.write(manifest)
