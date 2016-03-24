@@ -121,6 +121,28 @@ def _safe_copy(key, src, dest):
   if key in src:
     dest[key] = src[key]
 
+def cleanup_manifest(path, manifest, timestamp=time.time(), files=None):
+  """
+  Remove from existing manifest those parcels which are no longer exists
+
+  @param path: The path of the directory to scan for parcels
+  @param manifest: Existing manifest
+  @param timestamp: Unix timestamp to place in manifest.json
+  @param files: This files should be removed from manifest
+                even if they are exist
+  @return: the manifest.json as a string
+  """
+  existing_files = set([f for f in os.listdir(path) if f.endswith('.parcel')])
+  if files:
+    existing_files = existing_files - set(files)
+
+  manifest['parcels'] = [
+    item for item in manifest['parcels']
+    if item['parcelName'] in existing_files
+  ]
+  manifest['lastUpdated'] = int(timestamp * 1000)
+  return json.dumps(manifest, indent=4, separators=(',', ': '))
+
 def make_manifest(path, timestamp=time.time(), files=None, manifest=None):
   """
   Make a manifest.json document from the contents of a directory.
@@ -191,7 +213,7 @@ if __name__ == "__main__":
   path = os.path.curdir
   _ = sys.argv.pop(0)
   cmd = sys.argv.pop(0)
-  assert cmd in ('create', 'update')
+  assert cmd in ('create', 'update', 'cleanup')
   path = sys.argv.pop(0)
 
   fnames = sys.argv[:]
@@ -201,7 +223,7 @@ if __name__ == "__main__":
   with FileLock(path_to_filelock, timeout=60*10, delay=5):
     if cmd == 'create':
       manifest = None
-    elif cmd == 'update':
+    elif cmd in ('update', 'cleanup'):
       if not os.path.exists(path_to_manifest):
         raise ValueError('manifest.json expected at {} but not found'.format(path_to_manifest))
       with open(path_to_manifest, 'r') as fp:
@@ -209,7 +231,10 @@ if __name__ == "__main__":
 
     print("Scanning directory: %s" % (path))
 
-    manifest = make_manifest(path, files=fnames, manifest=manifest)
+    if cmd in ('create', 'update'):
+      manifest = make_manifest(path, files=fnames, manifest=manifest)
+    elif cmd == 'cleanup':
+      manifest = cleanup_manifest(path, manifest, files=fnames)
 
     with open(path_to_manifest, 'w') as fp:
       fp.write(manifest)
