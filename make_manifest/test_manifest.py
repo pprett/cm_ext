@@ -22,22 +22,21 @@ import test_deep_equality
 import unittest
 
 class TestMakeManifest(unittest.TestCase):
-  def test_make_manifest(self):
-    manifest_json = make_manifest.make_manifest('test_artifacts', 0)
-    with open('test_artifacts/expected.json') as fp:
+  def compare_with_file(self, filepath, manifest_json):
+    with open(filepath) as fp:
       expected_json = fp.read()
       manifest = json.loads(manifest_json)
       expected = json.loads(expected_json)
       test_deep_equality.deep_eq(manifest, expected, _assert=True)
 
+  def test_make_manifest(self):
+    manifest_json = make_manifest.make_manifest('test_artifacts', 0)
+    self.compare_with_file('test_artifacts/expected.json', manifest_json)
+
   def test_update_manifest(self):
     manifest_json = make_manifest.make_manifest('test_artifacts_update', timestamp=0,
                                                 files=['CDH-5.0.0-0.cdh5b2.p0.30-precise.parcel'])
-    with open('test_artifacts/expected.json') as fp:
-      expected_json = fp.read()
-      manifest = json.loads(manifest_json)
-      expected = json.loads(expected_json)
-      test_deep_equality.deep_eq(manifest, expected, _assert=True)
+    self.compare_with_file('test_artifacts/expected.json', manifest_json)
 
     old_manifest = json.loads(manifest_json)
 
@@ -49,6 +48,19 @@ class TestMakeManifest(unittest.TestCase):
     manifest = json.loads(manifest_json)
     test_deep_equality.deep_eq(manifest['parcels'][:1], old_manifest['parcels'], _assert=True)
     assert len(manifest['parcels']) == 3
+
+  def test_cleanup_manifest(self):
+    all_manifest_json = make_manifest.make_manifest('test_artifacts_update', timestamp=0)
+    self.compare_with_file('test_artifacts_cleanup/all.json', all_manifest_json)
+
+    one_manifest_json = make_manifest.cleanup_manifest('test_artifacts', timestamp=0,
+                                                       manifest=json.loads(all_manifest_json))
+    self.compare_with_file('test_artifacts_cleanup/one.json', one_manifest_json)
+
+    two_manifest_json = make_manifest.cleanup_manifest('test_artifacts_update', timestamp=0,
+                                                       files=['CDH-5.0.0-0.cdh5b2.p0.32-precise.parcel'],
+                                                       manifest=json.loads(all_manifest_json))
+    self.compare_with_file('test_artifacts_cleanup/two.json', two_manifest_json)
 
 
 if __name__ == "__main__":
